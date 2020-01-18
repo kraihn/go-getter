@@ -13,7 +13,8 @@ import (
 //   folder/subfolder/sub.tf
 //   collision/foo
 //   collision/foo/bar
-const azureBlobURL = "https://accountgoeshere.blob.core.windows.net"
+const azureBlobURL = "https://gaodnn4xiwdhaf45grxl4e7n.blob.core.windows.net"
+const sasToken = "sv=2019-02-02&ss=b&srt=sco&sp=rl&se=2020-01-18T11:54:44Z&st=2020-01" + "-18T03:54:44Z&spr=https&sig=eUCMteyC92gorqCHmg1qdafux%2BxwxpKTpcBjKfoJbAY%3D"
 
 func TestAzureBlob_impl(t *testing.T) {
 	var _ Getter = new(AzureBlobGetter)
@@ -25,7 +26,7 @@ func TestAzureBlobGetter(t *testing.T) {
 
 	// With a dir that doesn't exist
 	err := g.Get(
-		dst, testURL(fmt.Sprintf("%s/go-getter/folder", azureBlobURL)))
+		dst, testURL(fmt.Sprintf("%s/go-getter/folder?%s", azureBlobURL, sasToken)))
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -43,7 +44,7 @@ func TestAzureBlobGetter_subdir(t *testing.T) {
 
 	// With a dir that doesn't exist
 	err := g.Get(
-		dst, testURL(fmt.Sprintf("%s/go-getter/folder/subfolder", azureBlobURL)))
+		dst, testURL(fmt.Sprintf("%s/go-getter/folder/subfolder?%s", azureBlobURL, sasToken)))
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -61,7 +62,7 @@ func TestAzureBlobGetter_GetFile(t *testing.T) {
 
 	// Download
 	err := g.GetFile(
-		dst, testURL(fmt.Sprintf("%s/go-getter/folder/main.tf", azureBlobURL)))
+		dst, testURL(fmt.Sprintf("%s/go-getter/folder/main.tf?%s", azureBlobURL, sasToken)))
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -70,7 +71,7 @@ func TestAzureBlobGetter_GetFile(t *testing.T) {
 	if _, err := os.Stat(dst); err != nil {
 		t.Fatalf("err: %s", err)
 	}
-	assertContents(t, dst, "# Main\n")
+	assertContents(t, dst, "# Main")
 }
 
 func TestAzureBlobGetter_GetFile_badParams(t *testing.T) {
@@ -92,7 +93,7 @@ func TestAzureBlobGetter_GetFile_notfound(t *testing.T) {
 
 	// Download
 	err := g.GetFile(
-		dst, testURL(fmt.Sprintf("%s/go-getter/folder/404.tf", azureBlobURL)))
+		dst, testURL(fmt.Sprintf("%s/go-getter/folder/404.tf?%s", azureBlobURL, sasToken)))
 	if err == nil {
 		t.Fatalf("expected error, got none")
 	}
@@ -103,7 +104,7 @@ func TestAzureBlobGetter_ClientMode_dir(t *testing.T) {
 
 	// Check client mode on a key prefix with only a single key.
 	mode, err := g.ClientMode(
-		testURL(fmt.Sprintf("%s/go-getter/folder", azureBlobURL)))
+		testURL(fmt.Sprintf("%s/go-getter/folder?%s", azureBlobURL, sasToken)))
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -117,7 +118,7 @@ func TestAzureBlobGetter_ClientMode_file(t *testing.T) {
 
 	// Check client mode on a key prefix which contains sub-keys.
 	mode, err := g.ClientMode(
-		testURL(fmt.Sprintf("%s/go-getter/folder/main.tf", azureBlobURL)))
+		testURL(fmt.Sprintf("%s/go-getter/folder/main.tf?%s", azureBlobURL, sasToken)))
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -135,10 +136,11 @@ func TestAzureBlobGetter_ClientMode_notfound(t *testing.T) {
 	// prefix is handled properly (e.g., "/fold" and "/folder" don't put the
 	// client mode into "dir".
 	mode, err := g.ClientMode(
-		testURL(fmt.Sprintf("%s/go-getter/fold", azureBlobURL)))
+		testURL(fmt.Sprintf("%s/go-getter/fold?%s", azureBlobURL, sasToken)))
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
+	fmt.Println(mode)
 	if mode != ClientModeFile {
 		t.Fatal("expect ClientModeFile")
 	}
@@ -150,7 +152,7 @@ func TestAzureBlobGetter_ClientMode_collision(t *testing.T) {
 	// Check that the client mode is "file" if there is both an object and a
 	// folder with a common prefix (i.e., a "collision" in the namespace).
 	mode, err := g.ClientMode(
-		testURL(fmt.Sprintf("%s/go-getter/collision/foo", azureBlobURL)))
+		testURL(fmt.Sprintf("%s/go-getter/collision/foo?%s", azureBlobURL, sasToken)))
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}

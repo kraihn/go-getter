@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -23,34 +22,28 @@ type AzureBlobGetter struct {
 }
 
 func (g *AzureBlobGetter) ClientMode(u *url.URL) (ClientMode, error) {
-	// Parse URL
-	accountName, baseURL, containerName, blobPath, accessKey, err := g.parseUrl(u)
+	blobURLParts := azblob.NewBlobURLParts(*u)
+	client, err := g.getBobClient(blobURLParts, "")
 	if err != nil {
 		return 0, err
 	}
 
-	client, err := g.getBobClient(accountName, baseURL, accessKey)
-	if err != nil {
-		return 0, err
-	}
-
-	container := client.NewContainerURL(containerName)
+	container := client.NewContainerURL(blobURLParts.ContainerName)
 
 	ctx := context.Background()
 	for marker := (azblob.Marker{}); marker.NotDone(); {
-		listBlob, _ := container.ListBlobsFlatSegment(ctx, marker, azblob.ListBlobsSegmentOptions{Prefix: blobPath})
+		listBlob, _ := container.ListBlobsFlatSegment(ctx, marker, azblob.ListBlobsSegmentOptions{Prefix: blobURLParts.BlobName})
+
 		marker = listBlob.NextMarker
 
 		for _, blobInfo := range listBlob.Segment.BlobItems {
-			if blobInfo.Name == blobPath {
+			if blobInfo.Name == blobURLParts.BlobName {
 				return ClientModeFile, nil
 			}
 
-			if strings.HasPrefix(blobInfo.Name, blobPath+"/") {
+			if strings.HasPrefix(blobInfo.Name, blobURLParts.BlobName+"/") {
 				return ClientModeDir, nil
 			}
-
-			return 0, nil
 		}
 	}
 
@@ -59,13 +52,10 @@ func (g *AzureBlobGetter) ClientMode(u *url.URL) (ClientMode, error) {
 
 func (g *AzureBlobGetter) Get(dst string, u *url.URL) error {
 	//Parse URL
-	accountName, baseURL, containerName, blobPath, accessKey, err := g.parseUrl(u)
-	if err != nil {
-		return err
-	}
+	blobURLParts := azblob.NewBlobURLParts(*u)
 
 	// Remove destination if it already exists
-	_, err = os.Stat(dst)
+	_, err := os.Stat(dst)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -82,18 +72,17 @@ func (g *AzureBlobGetter) Get(dst string, u *url.URL) error {
 		return err
 	}
 
-	client, err := g.getBobClient(accountName, baseURL, accessKey)
+	client, err := g.getBobClient(blobURLParts, "")
 	if err != nil {
 		return err
 	}
 
-	containerURL := client.NewContainerURL(containerName)
+	containerURL := client.NewContainerURL(blobURLParts.ContainerName)
 
 	ctx := context.Background()
 	for marker := (azblob.Marker{}); marker.NotDone(); {
 		// Get a result segment starting with the blob indicated by the current Marker.
-		listBlob, _ := containerURL.ListBlobsFlatSegment(ctx, marker, azblob.ListBlobsSegmentOptions{Prefix: blobPath})
-		//handleErrors(err)
+		listBlob, _ := containerURL.ListBlobsFlatSegment(ctx, marker, azblob.ListBlobsSegmentOptions{Prefix: blobURLParts.BlobName})
 
 		// ListBlobs returns the start of the next segment; you MUST use this to get
 		// the next segment (after processing the current result segment).
@@ -109,14 +98,14 @@ func (g *AzureBlobGetter) Get(dst string, u *url.URL) error {
 			}
 
 			// Get the object destination path
-			objDst, err := filepath.Rel(blobPath, objPath)
+			objDst, err := filepath.Rel(blobURLParts.BlobName, objPath)
 			if err != nil {
 				return err
 			}
 
 			objDst = filepath.Join(dst, objDst)
 
-			if err := g.getObject(client, objDst, containerName, objPath); err != nil {
+			if err := g.getObject(client, objDst, blobURLParts.ContainerName, objPath); err != nil {
 				return err
 			}
 		}
@@ -126,17 +115,13 @@ func (g *AzureBlobGetter) Get(dst string, u *url.URL) error {
 }
 
 func (g *AzureBlobGetter) GetFile(dst string, u *url.URL) error {
-	accountName, baseURL, containerName, blobPath, accessKey, err := g.parseUrl(u)
+	blobURLParts := azblob.NewBlobURLParts(*u)
+	client, err := g.getBobClient(blobURLParts, "")
 	if err != nil {
 		return err
 	}
 
-	client, err := g.getBobClient(accountName, baseURL, accessKey)
-	if err != nil {
-		return err
-	}
-
-	return g.getObject(client, dst, containerName, blobPath)
+	return g.getObject(client, dst, blobURLParts.ContainerName, blobURLParts.BlobName)
 }
 
 func (g *AzureBlobGetter) getObject(serviceURL azblob.ServiceURL, dst, container, blobName string) error {
@@ -146,7 +131,7 @@ func (g *AzureBlobGetter) getObject(serviceURL azblob.ServiceURL, dst, container
 
 	get, err := blobURL.Download(ctx, 0, 0, azblob.BlobAccessConditions{}, false)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	downloadedData := &bytes.Buffer{}
@@ -168,44 +153,29 @@ func (g *AzureBlobGetter) getObject(serviceURL azblob.ServiceURL, dst, container
 	return err
 }
 
-func (g *AzureBlobGetter) getBobClient(accountName string, baseURL string, accountKey string) (azblob.ServiceURL, error) {
-	// Use your Storage account's name and key to create a credential object; this is used to access your account.
-	credential, err := azblob.NewSharedKeyCredential(accountName, accountKey)
+func (g *AzureBlobGetter) getBobClient(blobUrlParts azblob.BlobURLParts, accountKey string) (azblob.ServiceURL, error) {
+	accountName := strings.SplitN(blobUrlParts.Host, ".", 3)[0]
+
+	var credential azblob.Credential
+	var err error
+
+	if accountKey != "" {
+		credential, err = azblob.NewSharedKeyCredential(accountName, accountKey)
+	} else {
+		credential = azblob.NewAnonymousCredential()
+	}
+
 	if err != nil {
-		log.Fatal(err)
+		return azblob.ServiceURL{}, err
 	}
 
 	p := azblob.NewPipeline(credential, azblob.PipelineOptions{})
 
-	u, _ := url.Parse(fmt.Sprintf("https://%s.blob.%s", accountName, baseURL))
+	u := blobUrlParts.URL()
 
-	serviceURL := azblob.NewServiceURL(*u, p)
+	fqdn, _ := url.Parse(fmt.Sprintf("https://%s?%s", u.Host, u.RawQuery))
+
+	serviceURL := azblob.NewServiceURL(*fqdn, p)
 
 	return serviceURL, nil
-}
-
-func (g *AzureBlobGetter) parseUrl(u *url.URL) (accountName, baseURL, container, blobPath, accessKey string, err error) {
-	// Expected host style: accountname.blob.core.windows.net.
-	// The last 3 parts will be different across environments.
-	hostParts := strings.SplitN(u.Host, ".", 3)
-	if len(hostParts) != 3 {
-		err = fmt.Errorf("URL is not a valid Azure Blob URL")
-		return
-	}
-
-	accountName = hostParts[0]
-	baseURL = hostParts[2]
-
-	pathParts := strings.SplitN(strings.TrimPrefix(u.Path, "/"), "/", 2)
-	if len(pathParts) != 2 {
-		err = fmt.Errorf("URL is not a valid Azure Blob URL")
-		return
-	}
-
-	container = pathParts[0]
-	blobPath = pathParts[1]
-
-	accessKey = u.Query().Get("access_key")
-
-	return
 }
